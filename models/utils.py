@@ -43,7 +43,7 @@ def load_model(model_class: type, path: str, device: str = 'cpu'):
     if not os.path.exists(path):
         raise FileNotFoundError(f"Model file not found: {path}")
     
-    checkpoint = torch.load(path, map_location=device)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     
     # Get model parameters from checkpoint
     model_params = checkpoint.get('model_params', {})
