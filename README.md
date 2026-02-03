@@ -63,7 +63,7 @@ from models.sentiment_classifier.model import SentimentClassifier
 from models.utils import load_model
 
 **Testing Inference:**
-python test_inference.py
+python test_inference.pys
 
 model = load_model(SentimentClassifier, "models/sentiment_classifier/checkpoint.pth")
 # Use model for inference...
