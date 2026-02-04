@@ -2,15 +2,26 @@
 import os
 import sys
 import logging
+import time
 from typing import List
 from contextlib import asynccontextmanager
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+
+from monitoring.metrics import get_metrics_collector
+from monitoring.logging_config import setup_logging
+
+# Setup structured logging
+setup_logging(level="INFO", use_json=True)
+logger = logging.getLogger(__name__)
+
+# Initialize metrics collector
+metrics = get_metrics_collector()
 
 from serving.schemas import (
     PredictionRequest,
@@ -23,13 +34,6 @@ from serving.schemas import (
     ErrorResponse
 )
 from serving.ray_client import RayServeClient
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Initialize Ray Serve client
 ray_client = RayServeClient()
@@ -70,11 +74,59 @@ app.add_middleware(
 # Request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log all requests."""
-    logger.info(f"{request.method} {request.url.path}")
-    response = await call_next(request)
-    logger.info(f"Response status: {response.status_code}")
-    return response
+    start_time = time.time()
+    metrics.set_active_requests(metrics.active_requests._value.get() + 1)
+    
+    try:
+        logger.info(
+            f"{request.method} {request.url.path}",
+            extra={"extra_fields": {
+                "method": request.method,
+                "path": request.url.path,
+                "client_ip": request.client.host if request.client else None
+            }}
+        )
+        
+        response = await call_next(request)
+        
+        duration = time.time() - start_time
+        status_code = response.status_code
+        
+        # Record metrics
+        metrics.record_request(
+            method=request.method,
+            endpoint=request.url.path,
+            status_code=status_code,
+            duration=duration
+        )
+        
+        # Record errors
+        if status_code >= 400:
+            error_type = "client_error" if status_code < 500 else "server_error"
+            metrics.record_error(error_type, request.url.path)
+        
+        logger.info(
+            f"Response status: {status_code}",
+            extra={"extra_fields": {
+                "status_code": status_code,
+                "duration_seconds": duration
+            }}
+        )
+        
+        return response
+    except Exception as e:
+        duration = time.time() - start_time
+        metrics.record_error("exception", request.url.path)
+        metrics.record_request(
+            method=request.method,
+            endpoint=request.url.path,
+            status_code=500,
+            duration=duration
+        )
+        raise
+    finally:
+        metrics.set_active_requests(max(0, metrics.active_requests._value.get() - 1))
+
 
 
 # Root endpoint
@@ -108,6 +160,8 @@ async def health_check():
             )
         
         health_data = await ray_client.health_check()
+        is_healthy = health_data.get("status", "unknown") == "healthy"
+        metrics.set_model_health("sentiment_classifier", is_healthy)
         return HealthResponse(
             status=health_data.get("status", "healthy"),
             model=health_data.get("model", "sentiment_classifier"),
@@ -115,7 +169,8 @@ async def health_check():
             version="1.0.0"
         )
     except Exception as e:
-        logger.error(f"Health check error: {e}")
+        metrics.set_model_health("sentiment_classifier", False)
+        logger.error(f"Health check error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Service unavailable: {str(e)}"
@@ -170,7 +225,7 @@ async def predict(model_name: str, request: PredictionRequest):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Model '{model_name}' not found"
         )
-    
+    inference_start = time.time()
     try:
         if not ray_client.is_connected():
             raise HTTPException(
@@ -179,18 +234,26 @@ async def predict(model_name: str, request: PredictionRequest):
             )
         
         result = await ray_client.predict(request.text)
-        
+
+        inference_duration = time.time() - inference_start
+
         if "error" in result:
+            metrics.record_inference(model_name, inference_duration, status="error")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=result["error"]
             )
         
+        metrics.record_inference(model_name, inference_duration, status="success")
         return PredictionResponse(**result)
     except HTTPException:
+        inference_duration = time.time() - inference_start
+        metrics.record_inference(model_name, inference_duration, status="error")
         raise
     except Exception as e:
-        logger.error(f"Prediction error: {e}")
+        inference_duration = time.time() - inference_start
+        metrics.record_inference(model_name, inference_duration, status="error")
+        logger.error(f"Prediction error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {str(e)}"
@@ -211,27 +274,43 @@ async def predict_batch(model_name: str, request: BatchPredictionRequest):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Model '{model_name}' not found"
         )
-    
+    batch_size = len(request.texts)
+    inference_start = time.time()
     try:
         if not ray_client.is_connected():
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Ray Serve not connected"
             )
-        
+        # Record batch size
+        metrics.record_batch(model_name, batch_size)
+
         results = await ray_client.predict_batch(request.texts)
         
+        inference_duration = time.time() - inference_start
         # Convert to PredictionResponse objects
         predictions = [PredictionResponse(**result) for result in results if "error" not in result]
+        
+        errors = len(results) - len(predictions)
+         # Record inference metrics
+        status_val = "success" if errors == 0 else "partial_error"
+        metrics.record_inference(model_name, inference_duration, status=status_val)
+        
+        if errors > 0:
+            metrics.record_error("batch_error", f"/predict/{model_name}/batch")
         
         return BatchPredictionResponse(
             predictions=predictions,
             total=len(predictions)
         )
     except HTTPException:
+        inference_duration = time.time() - inference_start
+        metrics.record_inference(model_name, inference_duration, status="error")
         raise
     except Exception as e:
-        logger.error(f"Batch prediction error: {e}")
+        inference_duration = time.time() - inference_start
+        metrics.record_inference(model_name, inference_duration, status="error")
+        logger.error(f"Batch prediction error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Batch prediction failed: {str(e)}"
@@ -243,13 +322,13 @@ async def predict_batch(model_name: str, request: BatchPredictionRequest):
     "/metrics",
     tags=["Monitoring"],
     summary="Metrics endpoint",
-    description="Prometheus metrics (to be implemented in Week 2)"
+    description="Prometheus metrics"
 )
-async def metrics():
-    return {
-        "message": "Metrics endpoint - to be implemented in Week 2",
-        "prometheus_endpoint": "/metrics (coming soon)"
-    }
+async def metrics_endpoint():
+    return Response(
+        content=metrics.get_metrics(),
+        media_type=metrics.get_content_type()
+    )
 
 
 # Error handlers
