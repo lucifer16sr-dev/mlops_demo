@@ -1,0 +1,213 @@
+{
+    "dashboard": {
+      "title": "MLOps Inference Platform Dashboard",
+      "tags": ["mlops", "inference", "monitoring"],
+      "timezone": "browser",
+      "schemaVersion": 27,
+      "version": 1,
+      "refresh": "10s",
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "rate(mlops_requests_total[5m])",
+              "legendFormat": "{{method}} {{endpoint}} ({{status_code}})",
+              "refId": "A"
+            }
+          ],
+          "yaxes": [
+            {"format": "reqps", "label": "Requests/sec"},
+            {"format": "short"}
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Request Latency (p50, p95, p99)",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(mlops_request_duration_seconds_bucket[5m])) by (le, endpoint))",
+              "legendFormat": "p50 - {{endpoint}}",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(mlops_request_duration_seconds_bucket[5m])) by (le, endpoint))",
+              "legendFormat": "p95 - {{endpoint}}",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(mlops_request_duration_seconds_bucket[5m])) by (le, endpoint))",
+              "legendFormat": "p99 - {{endpoint}}",
+              "refId": "C"
+            }
+          ],
+          "yaxes": [
+            {"format": "s", "label": "Latency"},
+            {"format": "short"}
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Inference Rate",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {
+              "expr": "rate(mlops_inference_total[5m])",
+              "legendFormat": "{{model_name}} - {{status}}",
+              "refId": "A"
+            }
+          ],
+          "yaxes": [
+            {"format": "ops", "label": "Inferences/sec"},
+            {"format": "short"}
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Inference Latency",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(mlops_inference_duration_seconds_bucket[5m])) by (le, model_name))",
+              "legendFormat": "p50 - {{model_name}}",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(mlops_inference_duration_seconds_bucket[5m])) by (le, model_name))",
+              "legendFormat": "p95 - {{model_name}}",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(mlops_inference_duration_seconds_bucket[5m])) by (le, model_name))",
+              "legendFormat": "p99 - {{model_name}}",
+              "refId": "C"
+            }
+          ],
+          "yaxes": [
+            {"format": "s", "label": "Latency"},
+            {"format": "short"}
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Error Rate",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "targets": [
+            {
+              "expr": "rate(mlops_errors_total[5m])",
+              "legendFormat": "{{error_type}} - {{endpoint}}",
+              "refId": "A"
+            }
+          ],
+          "yaxes": [
+            {"format": "ops", "label": "Errors/sec"},
+            {"format": "short"}
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Batch Size Distribution",
+          "type": "graph",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "targets": [
+            {
+              "expr": "rate(mlops_batch_size_bucket[5m])",
+              "legendFormat": "{{model_name}} - {{le}}",
+              "refId": "A"
+            }
+          ],
+          "yaxes": [
+            {"format": "short", "label": "Rate"},
+            {"format": "short"}
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Active Requests",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 24},
+          "targets": [
+            {
+              "expr": "mlops_active_requests",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area"
+          }
+        },
+        {
+          "id": 8,
+          "title": "Model Health",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 24},
+          "targets": [
+            {
+              "expr": "mlops_model_health",
+              "legendFormat": "{{model_name}}",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "green"}
+              ]
+            }
+          }
+        },
+        {
+          "id": 9,
+          "title": "Total Requests",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 24},
+          "targets": [
+            {
+              "expr": "sum(mlops_requests_total)",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area"
+          }
+        },
+        {
+          "id": 10,
+          "title": "Total Inferences",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 18, "y": 24},
+          "targets": [
+            {
+              "expr": "sum(mlops_inference_total)",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area"
+          }
+        }
+      ],
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "timepicker": {
+        "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h"]
+      }
+    }
+  }
